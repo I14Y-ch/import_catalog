@@ -39,6 +39,9 @@ def process_distribution(row, index):
     if pd.notna(row.get(f'distribution_license_label_{index}')):
         distribution["license"] = {"code": row[f'distribution_license_label_{index}']}
 
+    distribution['title'] = {'de': 'Datenexport'}
+    distribution['description'] = {'de': 'Export der Daten'}
+
     return distribution
 
 def create_dataset_payload(row):
@@ -49,7 +52,7 @@ def create_dataset_payload(row):
             "description": create_language_object(row['description']),
             "identifiers": [row['identificator']],
             "publisher": DEFAULT_PUBLISHER,
-            "accessRights": {"code": row['accessRights']},
+            "accessRights": {"code": row['PUBLIC']},
             "issued": row['issued'].isoformat() if pd.notna(row['issued']) else None,
             "modified": row['modified'].isoformat() if pd.notna(row['modified']) else None,
         }
@@ -109,6 +112,7 @@ def submit_to_api(payload):
         "Content-Type": "application/json"
     }
     
+    print(payload)
     response = requests.post(
         f"{API_BASE_URL}/datasets",
         headers=headers,
