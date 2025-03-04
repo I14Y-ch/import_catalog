@@ -32,12 +32,24 @@ git clone [repository-url]
 cd bfs/2025_02_batchimport
 ```
 
-2. Install dependencies:
+2. (Optional but recommended) Create and activate a virtual environment:
+```bash
+# Create virtual environment
+python -m venv venv
+
+# Activate virtual environment
+# On Windows:
+venv\Scripts\activate
+# On macOS/Linux:
+source venv/bin/activate
+```
+
+3. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Configure the application:
+4. Configure the application:
    - Edit `src/config.py` with your I14Y API token and organization ID
 
 ## Usage
