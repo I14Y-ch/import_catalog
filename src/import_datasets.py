@@ -2,7 +2,9 @@ import pandas as pd
 import requests
 from datetime import datetime
 import json
+import sys
 from config import *
+from codelist_utils import map_theme_to_code, map_license_to_code, map_access_rights_to_code
 
 def create_language_object(text, lang="de"):
     """Create a language object with only German"""
@@ -15,29 +17,63 @@ def create_uri_label_object(uri, label=None):
         obj["label"] = create_language_object(label)
     return obj
 
+def safe_get(row, key, default=None):
+    """Safely get a value from a row, whether it's a Series, dict, or other object"""
+    if isinstance(row, dict):
+        return row.get(key, default)
+    elif isinstance(row, pd.Series):
+        return row[key] if key in row and pd.notna(row[key]) else default
+    else:
+        try:
+            val = getattr(row, key, default)
+            return val if pd.notna(val) else default
+        except:
+            return default
+
 def process_keywords(row):
     """Process keywords from the Excel row"""
     keywords = []
     for i in range(1, 4):
-        if pd.notna(row.get(f'keywords_{i}')):
-            keywords.append(create_language_object(row[f'keywords_{i}']))
+        key = f'keywords_{i}'
+        value = safe_get(row, key)
+        if pd.notna(value):
+            keywords.append(create_language_object(value))
     return keywords
 
 def process_distribution(row, index):
     """Process a single distribution"""
-    if pd.isna(row.get(f'distribution_accessUrl_{index}')) and pd.isna(row.get(f'distribution_downloadUrl_{index}')):
+    access_key = f'distribution_accessUrl_{index}'
+    download_key = f'distribution_downloadUrl_{index}'
+    license_key = f'distribution_license_label_{index}'
+    
+    access_url = safe_get(row, access_key)
+    download_url = safe_get(row, download_key)
+    
+    if pd.isna(access_url) and pd.isna(download_url):
         return None
 
     distribution = {}
     
-    if pd.notna(row.get(f'distribution_accessUrl_{index}')):
-        distribution["accessUrl"] = create_uri_label_object(row[f'distribution_accessUrl_{index}'])
+    # According to API validation, download URL must be the same as access URL
+    if pd.notna(access_url) and pd.notna(download_url):
+        # Use the access URL for both to satisfy API requirement
+        url_to_use = access_url
+        distribution["accessUrl"] = create_uri_label_object(url_to_use)
+        distribution["downloadUrl"] = create_uri_label_object(url_to_use)
+    elif pd.notna(access_url):
+        # If only access URL is provided, use it for both
+        distribution["accessUrl"] = create_uri_label_object(access_url)
+        distribution["downloadUrl"] = create_uri_label_object(access_url)
+    elif pd.notna(download_url):
+        # If only download URL is provided, use it for both
+        distribution["accessUrl"] = create_uri_label_object(download_url)
+        distribution["downloadUrl"] = create_uri_label_object(download_url)
     
-    if pd.notna(row.get(f'distribution_downloadUrl_{index}')):
-        distribution["downloadUrl"] = create_uri_label_object(row[f'distribution_downloadUrl_{index}'])
-    
-    if pd.notna(row.get(f'distribution_license_label_{index}')):
-        distribution["license"] = {"code": row[f'distribution_license_label_{index}']}
+    license_value = safe_get(row, license_key)
+    if pd.notna(license_value):
+        license_code = map_license_to_code(license_value)
+        if license_code:
+            distribution["license"] = {"code": license_code}
 
     distribution['title'] = {'de': 'Datenexport'}
     distribution['description'] = {'de': 'Export der Daten'}
@@ -46,13 +82,17 @@ def process_distribution(row, index):
 
 def create_dataset_payload(row):
     """Transform Excel row into I14Y API payload"""
+    # Get mapped codes for required fields
+    access_rights_value = safe_get(row, 'accessRights')
+    access_rights_code = map_access_rights_to_code(access_rights_value)
+    
     payload = {
         "data": {
             "title": create_language_object(row['title']),
             "description": create_language_object(row['description']),
             "identifiers": [row['identificator']],
             "publisher": DEFAULT_PUBLISHER,
-            "accessRights": {"code": row['PUBLIC']},
+            "accessRights": {"code": access_rights_code or "PUBLIC"},
             "issued": row['issued'].isoformat() if pd.notna(row['issued']) else None,
             "modified": row['modified'].isoformat() if pd.notna(row['modified']) else None,
         }
@@ -64,33 +104,44 @@ def create_dataset_payload(row):
         payload["data"]["keywords"] = keywords
 
     # Add contact points if present
-    if pd.notna(row.get('contactPoints_fn')) or pd.notna(row.get('contactPoints_hasEmail')):
+    contact_fn = safe_get(row, 'contactPoints_fn')
+    contact_email = safe_get(row, 'contactPoints_hasEmail')
+    contact_phone = safe_get(row, 'contactPoints_hasTelephone')
+    
+    if pd.notna(contact_fn) or pd.notna(contact_email):
         contact_point = {
             "kind": "Organization"
         }
-        if pd.notna(row.get('contactPoints_fn')):
-            contact_point["fn"] = create_language_object(row['contactPoints_fn'])
-        if pd.notna(row.get('contactPoints_hasEmail')):
-            contact_point["hasEmail"] = row['contactPoints_hasEmail']
-        if pd.notna(row.get('contactPoints_hasTelephone')):
-            contact_point["hasTelephone"] = row['contactPoints_hasTelephone']
+        if pd.notna(contact_fn):
+            contact_point["fn"] = create_language_object(contact_fn)
+        if pd.notna(contact_email):
+            contact_point["hasEmail"] = contact_email
+        if pd.notna(contact_phone):
+            contact_point["hasTelephone"] = contact_phone
         payload["data"]["contactPoints"] = [contact_point]
 
     # Add themes if present
-    if pd.notna(row.get('themes_label')):
-        payload["data"]["themes"] = [{"code": row['themes_label']}]
+    theme_value = safe_get(row, 'themes_label')
+    if pd.notna(theme_value):
+        theme_code = map_theme_to_code(theme_value)
+        if theme_code:
+            payload["data"]["themes"] = [{"code": theme_code}]
 
     # Add spatial if present
-    if pd.notna(row.get('spatial')):
-        payload["data"]["spatial"] = [row['spatial']]
+    spatial_value = safe_get(row, 'spatial')
+    if pd.notna(spatial_value):
+        payload["data"]["spatial"] = [spatial_value]
 
     # Add temporal coverage if present
-    if pd.notna(row.get('temporalCoverage_start')) or pd.notna(row.get('temporalCoverage_end')):
+    temp_start = safe_get(row, 'temporalCoverage_start')
+    temp_end = safe_get(row, 'temporalCoverage_end')
+    
+    if pd.notna(temp_start) or pd.notna(temp_end):
         coverage = {}
-        if pd.notna(row.get('temporalCoverage_start')):
-            coverage["start"] = row['temporalCoverage_start'].isoformat()
-        if pd.notna(row.get('temporalCoverage_end')):
-            coverage["end"] = row['temporalCoverage_end'].isoformat()
+        if pd.notna(temp_start):
+            coverage["start"] = temp_start.isoformat()
+        if pd.notna(temp_end):
+            coverage["end"] = temp_end.isoformat()
         payload["data"]["temporalCoverage"] = [coverage]
 
     # Process distributions
@@ -126,7 +177,12 @@ def submit_to_api(payload):
 
 def main():
     # Read Excel file
-    df = pd.read_excel(TEMPLATE_PATH)
+    try:
+        df = pd.read_excel(TEMPLATE_PATH)
+        print(f"Successfully loaded {len(df)} entries from {TEMPLATE_PATH}")
+    except Exception as e:
+        print(f"Error loading Excel file: {e}")
+        sys.exit(1)
     
     # Process each row
     success_count = 0
@@ -135,10 +191,13 @@ def main():
     print("\nStarting dataset import...\n")
     
     for idx, row in df.iterrows():
-        if pd.isna(row['title']):  # Skip empty rows
+        title_value = safe_get(row, 'title')
+        if pd.isna(title_value):  # Skip empty rows
             continue
             
-        print(f"Processing dataset {idx + 1}: {row['identificator']}")
+        identificator = safe_get(row, 'identificator', 'No ID')
+        print(f"Processing dataset {idx + 1}: {identificator}")
+        
         try:
             payload = create_dataset_payload(row)
             response = submit_to_api(payload)

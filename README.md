@@ -67,7 +67,8 @@ This will generate `data/template_datasets.xlsx` with data validation and refere
 ### Import Datasets
 
 1. Fill in the Excel template with your dataset information
-2. Run the import script:
+2. Log in on the interoperability platform. Copy the token clicking on the profile symbol. Fill in the token in the file config.py. Also provide the identifier of your organsation. 
+3. Run the import script:
 
 ```bash
 python src/import_datasets.py
